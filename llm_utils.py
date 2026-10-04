@@ -1,18 +1,38 @@
+# import os
+# import re
+# from dotenv import load_dotenv
+# from langchain_google_genai import ChatGoogleGenerativeAI
+# from pypdf import PdfReader
+
+# load_dotenv()
+
+# llm = ChatGoogleGenerativeAI(
+#     model="gemini-flash-lite-latest",
+#     google_api_key=os.getenv("GEMINI_API_KEY"),
+#     temperature=0,
+# )
+
 import os
 import re
+import streamlit as st
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pypdf import PdfReader
 
 load_dotenv()
 
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        api_key = None
+
 llm = ChatGoogleGenerativeAI(
     model="gemini-flash-lite-latest",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
+    google_api_key=api_key,
     temperature=0,
 )
-
-
 def extract_resume_text(file):
     reader = PdfReader(file)
     return "\n".join(page.extract_text() or "" for page in reader.pages)
