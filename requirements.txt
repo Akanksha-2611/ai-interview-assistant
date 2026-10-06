@@ -1,5 +1,6 @@
 langchain-community
 langchain-google-genai
 pypdf
-streamlit
+streamlit>=1.40
 python-dotenv
+fpdf2
