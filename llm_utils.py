@@ -26,6 +26,26 @@ llm = ChatGoogleGenerativeAI(
 
 LEVELS = ["Easy", "Medium", "Hard"]
 
+MODES = {
+    "Technical": {
+        "types": ["Technical", "Project-Based", "Scenario-Based"],
+        "focus": "technical depth, correctness and practical experience",
+    },
+    "HR": {
+        "types": ["Motivation", "Career Goals", "Culture Fit", "Situational"],
+        "focus": "communication, motivation, self-awareness and culture fit",
+    },
+    "Behavioral": {
+        "types": ["Teamwork", "Conflict", "Leadership", "Failure & Learning"],
+        "focus": "use of the STAR method (Situation, Task, Action, Result) "
+                 "with concrete real examples",
+    },
+    "System Design": {
+        "types": ["Architecture", "Scalability", "Trade-offs"],
+        "focus": "architecture choices, scalability, trade-offs and clear reasoning",
+    },
+}
+
 
 def _parse_json(text):
     text = text.strip()
@@ -39,7 +59,6 @@ def extract_resume_text(file):
 
 
 def adjust_difficulty(current, last_score):
-    """Raise difficulty after a strong answer, lower it after a weak one."""
     if last_score is None:
         return current
     i = LEVELS.index(current)
@@ -50,10 +69,11 @@ def adjust_difficulty(current, last_score):
     return LEVELS[i]
 
 
-def generate_next_question(resume_text, job_desc, role, difficulty, q_type, asked):
+def generate_next_question(resume_text, job_desc, role, difficulty,
+                           q_type, asked, mode="Technical"):
     asked_text = "\n".join(f"- {q}" for q in asked) or "None yet"
     prompt = f"""
-    You are a Senior Technical Interviewer interviewing for the role: {role or "General"}.
+    You are a Senior Interviewer running a {mode} interview for the role: {role or "General"}.
 
     Job description (may be empty):
     {job_desc or "Not provided"}
@@ -61,8 +81,9 @@ def generate_next_question(resume_text, job_desc, role, difficulty, q_type, aske
     Candidate resume:
     {resume_text}
 
-    Ask ONE new {q_type} interview question at {difficulty} difficulty.
-    It must fit the candidate's skills and the role.
+    Ask ONE new {q_type} question at {difficulty} difficulty.
+    Focus on: {MODES[mode]["focus"]}.
+    It must fit the candidate's background and the role.
     Do NOT repeat or closely resemble these earlier questions:
     {asked_text}
 
@@ -78,10 +99,12 @@ def generate_next_question(resume_text, job_desc, role, difficulty, q_type, aske
         return None
 
 
-def evaluate_answer(question, answer, role="", job_desc=""):
+def evaluate_answer(question, answer, role="", job_desc="", mode="Technical"):
     prompt = f"""
-    You are a strict but fair technical interviewer hiring for: {role or "General"}.
+    You are a strict but fair interviewer running a {mode} interview
+    for the role: {role or "General"}.
     Job description: {job_desc or "Not provided"}
+    Judge mainly on: {MODES[mode]["focus"]}.
 
     Question: {question}
     Candidate Answer: {answer}
@@ -91,7 +114,7 @@ def evaluate_answer(question, answer, role="", job_desc=""):
       "score": <integer from 0 to 10>,
       "strengths": "<short text>",
       "missing_points": "<short text>",
-      "ideal_answer": "<concise correct answer>"
+      "ideal_answer": "<concise strong sample answer>"
     }}
     """
     try:
@@ -117,7 +140,6 @@ def followup_question(question, answer):
 
 
 def transcribe_audio(audio_bytes):
-    """Convert a recorded answer to text using Gemini."""
     b64 = base64.b64encode(audio_bytes).decode()
     message = HumanMessage(
         content=[
@@ -129,14 +151,42 @@ def transcribe_audio(audio_bytes):
     return llm.invoke([message]).text.strip()
 
 
-def generate_final_report(results, role=""):
+def analyze_resume(resume_text, role="", job_desc=""):
+    prompt = f"""
+    You are an expert recruiter and ATS (applicant tracking system) specialist.
+    Target role: {role or "General"}
+    Job description: {job_desc or "Not provided"}
+
+    Resume:
+    {resume_text}
+
+    Review the resume and return ONLY a JSON object, with no extra text:
+    {{
+      "ats_score": <integer 0 to 100>,
+      "summary": "<2 sentence overall impression>",
+      "strengths": ["...", "..."],
+      "weaknesses": ["...", "..."],
+      "missing_keywords": ["...", "..."],
+      "suggestions": ["...", "..."]
+    }}
+    """
+    try:
+        data = _parse_json(llm.invoke(prompt).text)
+        data["ats_score"] = max(0, min(100, int(data.get("ats_score", 0))))
+        return data
+    except Exception:
+        return None
+
+
+def generate_final_report(results, role="", mode="Technical"):
     summary = "\n".join(
         f"Q{i+1} ({r['type']}, {r['difficulty']}): {r['question']}\n"
         f"Score: {r['score']}/10, Time: {r['time_taken']}s"
         for i, r in enumerate(results)
     )
     prompt = f"""
-    You are a senior interviewer writing a final report for the role: {role or "General"}.
+    You are a senior interviewer writing a final report for a {mode} interview
+    for the role: {role or "General"}.
 
     Interview results:
     {summary}
@@ -152,12 +202,11 @@ def generate_final_report(results, role=""):
 
 
 def _clean(text):
-    """fpdf's built-in fonts only support latin-1, so remove other characters."""
     text = str(text).replace("**", "").replace("#", "")
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def build_pdf(results, report, role, total_score, max_score):
+def build_pdf(results, report, role, mode, total_score, max_score):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
@@ -168,7 +217,7 @@ def build_pdf(results, report, role, total_score, max_score):
 
     percent = total_score / max_score * 100 if max_score else 0
     write("AI Interview Report", 18, True)
-    write(f"Role: {role or 'General'}")
+    write(f"Role: {role or 'General'}   |   Mode: {mode}")
     write(f"Total Score: {total_score}/{max_score} ({percent:.0f}%)", 12, True)
     pdf.ln(4)
 
