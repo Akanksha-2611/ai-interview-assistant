@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    image: ai-interview-assistant:5.0
+    container_name: ai-interview-assistant
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    restart: unless-stopped
