@@ -8,15 +8,21 @@ from llm_utils import (
 )
 from db import (
     db_enabled, sign_up, sign_in, sign_out, save_interview, fetch_history,
+    submit_to_leaderboard,
 )
+from features import research_company, make_score_card
+from emailer import email_enabled, send_report
+from extra_pages import coding_page, speaking_page, leaderboard_page
 
-st.set_page_config(page_title="AI Interview Assistant v4.0", page_icon="🤖")
+st.set_page_config(page_title="AI Interview Assistant v5.0", page_icon="🤖")
 
 defaults = {
     "stage": "setup",
     "resume_text": "",
     "job_desc": "",
     "role": "",
+    "company": "",
+    "company_brief": "",
     "mode": "Technical",
     "total_q": 5,
     "time_limit": 180,
@@ -30,6 +36,8 @@ defaults = {
     "report": "",
     "q_start": None,
     "saved": False,
+    "emailed": False,
+    "lb_submitted": False,
 }
 for key, value in defaults.items():
     if key not in st.session_state:
@@ -73,7 +81,6 @@ def advance(last_score):
 
 @st.fragment(run_every=1)
 def countdown(start, limit):
-    """Live timer: only this small block refreshes every second."""
     left = int(limit - (time.time() - start))
     if left > 0:
         m, s = divmod(left, 60)
@@ -81,19 +88,21 @@ def countdown(start, limit):
     else:
         st.markdown(":red[⏰ **Time's up!** Please wrap up your answer.]")
 
+
+# ======================= LOGIN PAGE =======================
 def auth_page():
     st.markdown("<br>", unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         st.title("🤖 AI Interview Assistant")
-        st.caption("Practice interviews, review your resume, and track your progress.")
+        st.caption("Practice interviews, code reviews, speaking drills and more.")
 
         tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
 
         with tab_login:
             email = st.text_input("Email", key="li_email")
             password = st.text_input("Password", type="password", key="li_pass")
-            if st.button("Log in", type="primary", use_container_width=True):
+            if st.button("Log in", type="primary"):
                 try:
                     sign_in(email, password)
                     st.rerun()
@@ -104,7 +113,7 @@ def auth_page():
             email2 = st.text_input("Email", key="su_email")
             password2 = st.text_input("Password (min 6 characters)",
                                       type="password", key="su_pass")
-            if st.button("Create account", type="primary", use_container_width=True):
+            if st.button("Create account", type="primary"):
                 try:
                     sign_up(email2, password2)
                     st.success("Account created. Now switch to the Log in tab "
@@ -113,16 +122,18 @@ def auth_page():
                     st.error(f"Sign up failed: {e}")
 
         st.divider()
-        if st.button("Continue as guest (history won't be saved)",
-                     use_container_width=True):
+        if st.button("Continue as guest (history won't be saved)"):
             st.session_state.guest = True
             st.rerun()
+
 
 # ======================= SIDEBAR =======================
 def sidebar():
     st.sidebar.title("🤖 AI Interview")
     page = st.sidebar.radio(
-        "Menu", ["🎤 Mock Interview", "📄 Resume Review", "📈 My Progress"]
+        "Menu",
+        ["🎤 Mock Interview", "💻 Coding Round", "🗣️ Speaking Practice",
+         "📄 Resume Review", "📈 My Progress", "🏆 Leaderboard"],
     )
     st.sidebar.divider()
 
@@ -150,30 +161,42 @@ def interview_page():
     if ss.stage == "setup":
         uploaded_file = st.file_uploader("Upload Resume (PDF)", type=["pdf"])
         mode = st.selectbox("Interview mode", list(MODES.keys()))
-        role = st.text_input("Target role (optional)", placeholder="e.g. Python Developer")
+        c_a, c_b = st.columns(2)
+        role = c_a.text_input("Target role (optional)", placeholder="e.g. Python Developer")
+        company = c_b.text_input("Target company (optional)", placeholder="e.g. Infosys")
         job_desc = st.text_area("Paste job description (optional)", height=120)
 
         c1, c2, c3 = st.columns(3)
         num_q = c1.slider("Questions", 3, 15, 5)
         difficulty = c2.selectbox("Starting difficulty", ["Easy", "Medium", "Hard"], index=1)
         time_limit = c3.slider("Seconds per question", 60, 300, 180, step=30)
-        st.caption("Difficulty adapts automatically based on your scores.")
+        st.caption("Difficulty adapts automatically based on your scores. "
+                   "If you enter a company, questions are tailored to it.")
 
         if st.button("🚀 Start Interview", type="primary"):
             if not uploaded_file:
                 st.warning("Please upload a resume first.")
             else:
+                brief = ""
+                if company.strip():
+                    with st.spinner(f"Researching {company.strip()}..."):
+                        brief = research_company(company.strip(), role)
+                full_jd = job_desc
+                if brief:
+                    full_jd += f"\n\nCompany brief ({company.strip()}):\n{brief}"
+
                 with st.spinner("Reading resume and preparing the first question..."):
                     text = extract_resume_text(uploaded_file)
                     first = generate_next_question(
-                        text, job_desc, role, difficulty,
+                        text, full_jd, role, difficulty,
                         MODES[mode]["types"][0], [], mode,
                     )
                 if first is None:
                     st.error("Could not generate a question. Please try again.")
                 else:
                     ss.update(
-                        resume_text=text, job_desc=job_desc, role=role,
+                        resume_text=text, job_desc=full_jd, role=role,
+                        company=company.strip(), company_brief=brief,
                         mode=mode, total_q=num_q, time_limit=time_limit,
                         difficulty=difficulty, questions=[first],
                         stage="interview",
@@ -193,6 +216,11 @@ def interview_page():
         if ss.results:
             running = sum(r["score"] for r in ss.results) / len(ss.results)
             st.caption(f"Running average: {running:.1f} / 10")
+
+        if ss.company_brief:
+            with st.expander(f"🏢 Company brief: {ss.company}"):
+                st.write(ss.company_brief)
+                st.caption("AI-written summary. Please verify important facts.")
 
         st.markdown(f"### {q['question']}")
         st.caption(f"Mode: {ss.mode}  |  Type: {q['type']}  |  Difficulty: {q['difficulty']}")
@@ -285,6 +313,7 @@ def interview_page():
         total_score = sum(r["score"] for r in results)
         max_score = len(results) * 10
         percent = total_score / max_score * 100 if max_score else 0
+        user = ss.get("user")
 
         st.subheader("🏆 Final Result")
         c1, c2, c3, c4 = st.columns(4)
@@ -303,7 +332,7 @@ def interview_page():
 
         # Save to history
         if not ss.saved:
-            if st.session_state.get("user"):
+            if user:
                 try:
                     save_interview(ss.role, ss.mode, total_score, max_score, results)
                     ss.saved = True
@@ -324,12 +353,62 @@ def interview_page():
                 st.markdown(f"**Missing points:** {r['missing_points']}")
                 st.markdown(f"**Ideal answer:** {r['ideal_answer']}")
 
+        # Export
+        pdf_bytes = build_pdf(results, ss.report, ss.role, ss.mode, total_score, max_score)
         st.download_button(
-            "⬇️ Download PDF Report",
-            build_pdf(results, ss.report, ss.role, ss.mode, total_score, max_score),
-            file_name="interview_report.pdf",
-            mime="application/pdf",
+            "⬇️ Download PDF Report", pdf_bytes,
+            file_name="interview_report.pdf", mime="application/pdf",
         )
+
+        # Share
+        st.markdown("### 🎁 Share & export")
+        name = st.text_input(
+            "Your name (shown on the score card and leaderboard)",
+            key="display_name", max_chars=20,
+        )
+        card = make_score_card(
+            name.strip() or "Candidate", percent, total_score, max_score,
+            ss.mode, ss.role,
+        )
+        st.image(card)
+        st.download_button(
+            "🖼️ Download score card", card,
+            file_name="score_card.png", mime="image/png",
+        )
+
+        # Email
+        if user and email_enabled():
+            if ss.emailed:
+                st.success(f"📧 Report sent to {user.email}")
+            elif st.button("📧 Email report to me"):
+                try:
+                    with st.spinner("Sending..."):
+                        send_report(user.email, pdf_bytes, ss.role, ss.mode, percent)
+                    ss.emailed = True
+                    st.success(f"📧 Report sent to {user.email}")
+                except Exception as e:
+                    st.error(f"Could not send the email: {e}")
+        elif user:
+            st.caption("📧 Email is not configured (add SMTP_USER and SMTP_PASSWORD).")
+        else:
+            st.caption("📧 Log in to email the report to yourself.")
+
+        # Leaderboard
+        if user and db_enabled():
+            if ss.lb_submitted:
+                st.success("🏆 Submitted to the leaderboard")
+            elif len(results) < 5:
+                st.caption("🏆 The leaderboard needs an interview with 5+ questions.")
+            elif st.button("🏆 Submit to leaderboard"):
+                if len(name.strip()) < 2:
+                    st.warning("Enter a name (2 to 20 characters) first.")
+                else:
+                    try:
+                        submit_to_leaderboard(name.strip(), ss.mode, percent, len(results))
+                        ss.lb_submitted = True
+                        st.success("🏆 Submitted to the leaderboard")
+                    except Exception as e:
+                        st.error(f"Could not submit: {e}")
 
         if st.button("🔄 Start New Interview"):
             restart()
@@ -404,14 +483,14 @@ def progress_page():
     df["percent"] = df["percent"].astype(float)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Interviews", len(df))
+    c1.metric("Sessions", len(df))
     c2.metric("Best Score", f"{df['percent'].max():.0f}%")
     c3.metric("Average", f"{df['percent'].mean():.0f}%")
 
     st.markdown("#### Score trend")
     st.line_chart(df.sort_values("created_at").set_index("created_at")["percent"])
 
-    st.markdown("#### Past interviews")
+    st.markdown("#### Past sessions")
     for r in rows:
         when = pd.to_datetime(r["created_at"]).strftime("%d %b %Y, %H:%M")
         title = f"{when} | {r['mode']} | {r['role']} | {float(r['percent']):.0f}%"
@@ -419,7 +498,6 @@ def progress_page():
             for i, d in enumerate(r["details"] or []):
                 st.markdown(f"**Q{i+1}. {d['question']}** — {d['score']}/10")
                 st.caption(f"Missing: {d['missing_points']}")
-
 
 
 # ======================= ROUTER =======================
@@ -432,7 +510,13 @@ else:
     page = sidebar()
     if page == "🎤 Mock Interview":
         interview_page()
+    elif page == "💻 Coding Round":
+        coding_page()
+    elif page == "🗣️ Speaking Practice":
+        speaking_page()
     elif page == "📄 Resume Review":
         resume_page()
-    else:
+    elif page == "📈 My Progress":
         progress_page()
+    else:
+        leaderboard_page()

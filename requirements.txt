@@ -5,3 +5,5 @@ streamlit>=1.40
 python-dotenv
 fpdf2
 supabase
+streamlit-ace
+pillow

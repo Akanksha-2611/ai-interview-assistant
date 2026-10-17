@@ -72,3 +72,25 @@ def fetch_history():
         .execute()
     )
     return res.data
+
+
+def submit_to_leaderboard(nickname, mode, percent, questions):
+    user = st.session_state.get("user")
+    if not user:
+        return
+    get_client().table("leaderboard").insert({
+        "user_id": user.id,
+        "nickname": nickname,
+        "mode": mode,
+        "percent": round(percent, 1),
+        "questions": questions,
+    }).execute()
+
+
+def fetch_leaderboard(mode=None, limit=100):
+    q = get_client().table("leaderboard").select(
+        "nickname,mode,percent,questions,created_at"
+    )
+    if mode and mode != "All":
+        q = q.eq("mode", mode)
+    return q.order("percent", desc=True).limit(limit).execute().data
