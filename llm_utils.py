@@ -8,6 +8,8 @@ from fpdf import FPDF
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pypdf import PdfReader
+from resilient import wrap_llm
+
 
 load_dotenv()
 
@@ -23,6 +25,8 @@ llm = ChatGoogleGenerativeAI(
     google_api_key=api_key,
     temperature=0,
 )
+
+llm = wrap_llm(llm)
 
 LEVELS = ["Easy", "Medium", "Hard"]
 
@@ -123,6 +127,7 @@ def evaluate_answer(question, answer, role="", job_desc="", mode="Technical"):
         return result
     except Exception:
         return {
+            "failed": True,
             "score": 0,
             "strengths": "Could not evaluate this answer.",
             "missing_points": "Please try again.",
