@@ -35,9 +35,12 @@ defaults = {
     "emailed": False,
     "lb_submitted": False,
 }
-for _key, _value in defaults.items():
-    if _key not in st.session_state:
-        st.session_state[_key] = _value
+def init_state():
+    """Runs on every page load. A module body only runs once per server, so
+    each new browser session (guest, new login, after logout) needs this."""
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def restart():
@@ -87,6 +90,7 @@ def countdown(start, limit):
 
 # ======================= PAGE: INTERVIEW =======================
 def interview_page():
+    init_state()
     ss = st.session_state
     st.title("🎤 Mock Interview")
 
